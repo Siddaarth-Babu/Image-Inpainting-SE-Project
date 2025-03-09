@@ -248,6 +248,9 @@ class TotalVariationLoss(nn.Module) :
         # Initializing the loss to 0
         loss=0.
 
+        # Adding a extra dimension to mask to avoid broadcasting error
+        mask = torch.from_numpy(mask).unsqueeze(0)
+
         # For each result image finding the variation of the cut out portion
         for idx,res in enumerate(results) :
 
@@ -260,12 +263,27 @@ class TotalVariationLoss(nn.Module) :
     
 class InpaintLoss(nn.Module) :
     """
-    
+    This is the total loss function incorporating the structure loss and texture loss
     """
 
     def __init__(self,channel_img=3,s_layers = [0,1,2,3,4,5],t_layers=[0,1,2],w_l1=6.,w_per=0.1,w_style=240.,w_tv=0.1) :
+        """
+        Initializing all the loss function and their respective weights
+
+        **Inputs**:
+        - channel_img: Number of channels in the image
+        - s_layers: List of index of the structure layers (ie in the final U Network)
+        - t_layers: List of index of the texture layers (ie in the final U Network)
+        - w_l1: Weight for the L1 loss
+        - w_per: Weight for the Perceptual loss
+        - w_style: Weight for the style loss
+        - w_tv: Weight for the tv loss
+        """
+
+        # Calling the constructor of the parent class
         super().__init__()
 
+        # Saving the inputs as class parameters
         self.struct_layers = s_layers
         self.text_layers = t_layers
 
@@ -281,32 +299,52 @@ class InpaintLoss(nn.Module) :
         self.tvloss = TotalVariationLoss(channel_img=channel_img)
 
     def forward(self,results,target,mask) :
+        """
+        Forward pass of results, target, mask finding the total loss including structure loss and texture loss
 
+        **Input**:
+        - results: List of results images (tensor). Need not be of the same size as target image
+        - target: Target image (tensor).
+        - mask: Grayscale mask image
+        """
+
+        # Resizing the target image according to the images in the results
         targets = [xtoySize(target,res) for res in results]
+
+        # Initializing structure loss and texture loss to 0
         loss_structure = 0.
         loss_texture = 0.
 
+        # Finding Structure loss
         if len(self.struct_layers) > 0 :
 
+            # Storing the results and targets image corresponding to the structure layers selected
             res_struct = [results[i] for i in self.struct_layers]
-            tar_struct = [target[i] for i in self.struct_layers]
+            tar_struct = [targets[i] for i in self.struct_layers]
 
+            # Calling the forward function of Reconstruction loss
             loss_structure = self.rloss(res_struct,tar_struct) * self.w_l1
 
+        # Finding the texturee loss
         if len(self.text_layers) > 0:
-
+            
+            # Storing the results and targets image corresponding to the texture layers selected 
             res_text = [results[i] for i in self.text_layers]
-            tar_text = [target[i] for i in self.text_layers]
+            tar_text = [targets[i] for i in self.text_layers]
 
+            # Storing the vgg features of the results and target images of the texture layers
             vgg_res = [self.vgg(res) for res in res_text]
             vgg_tar = [self.vgg(tar) for tar in tar_text]
 
-            loss_style =self.stloss(vgg_res,vgg_tar)*self.w_style
+            # Calling the forward function of Perceptual loss, Style loss, TotalVariation loss
             loss_per = self.ploss(vgg_res,vgg_tar)*self.w_per
+            loss_style =self.stloss(vgg_res,vgg_tar)*self.w_style
             loss_tv = self.tvloss(res_text,mask)*self.w_tv
 
+            # Computing the overall texture loss
             loss_texture = loss_style + loss_per + loss_tv
 
+        # Computing the overall loss (structure + texture) for the image
         loss_total = loss_structure + loss_texture
 
         return loss_total
